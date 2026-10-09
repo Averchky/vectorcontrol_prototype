@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Enforcement cases · VCS3 prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<!-- SCR-11 Enforcement cases (US-024) -->
+<main id="main" class="app-main" tabindex="-1">
+  <div class="page-banner"><div class="breadcrumb">Records</div><h1>Enforcement cases</h1></div>
+  <div class="page-content" id="content"></div>
+</main>
+<script src="data/seed.js"></script>
+<script src="js/store.js"></script>
+<script src="js/rules.js"></script>
+<script src="js/workflow.js"></script>
+<script src="js/app.js"></script>
+<script>
+(function () {
+  var S = VCS.store, R = VCS.rules, A = VCS.app;
+  A.init({ page: 'cases', render: function () {
+    var u = S.currentUser();
+    var all = S.list('enforcementCases').filter(function (c) {
+      return u.role !== 'FIELD_OFFICER' || S.get('inspections', c.inspectionId).assignedTo === u.id; // BR-025
+    });
+    var statuses = ['Open', 'Awaiting Payment', 'Awaiting Re-inspection', 'Closed', 'Referred for Prosecution', 'Cancelled'];
+    var pre = A.qs('status') || '';
+    document.getElementById('content').innerHTML =
+      (u.role === 'FIELD_OFFICER' ? '<p class="muted">You see cases from your inspections (BR-025).</p>' : '') +
+      '<div class="toolbar" role="search">' +
+      A.field('q', 'Search', '<input class="input" id="q" type="search" placeholder="Case ID, address, postal code or owner">') +
+      A.field('st', 'Status', '<select class="select" id="st"><option value="">All statuses</option>' + statuses.map(function (s) { return '<option' + (s === pre ? ' selected' : '') + '>' + s + '</option>'; }).join('') + '</select>') +
+      '</div><div class="result-count" id="count" aria-live="polite"></div><div id="list"></div>';
+    function draw() {
+      var q = document.getElementById('q').value, st = document.getElementById('st').value;
+      var rows = all.filter(function (c) {
+        var p = S.get('premises', c.premisesId), o = S.get('ownerOccupiers', p.ownerOccupierId);
+        return A.matches(c.id + ' ' + p.address + ' ' + p.postalCode + ' ' + o.name, q) && (!st || c.status === st);
+      }).sort(function (a, b) { return a.createdAt < b.createdAt ? 1 : -1; });
+      document.getElementById('count').textContent = rows.length + ' of ' + all.length + ' enforcement cases';
+      document.getElementById('list').innerHTML = A.table([
+        { label: 'Case', html: function (c) { return A.link('EnforcementCase', c.id); } },
+        { label: 'Premises', html: function (c) { return A.premisesLink(c.premisesId); } },
+        { label: 'Opened', html: function (c) { return A.fmtDate(c.createdAt); } },
+        { label: 'Offence no.', num: true, html: function (c) { return c.offenceCount; } },
+        { label: 'Latest notice', html: function (c) { var n = R.latestNotice(c.id); return n ? A.link('Notice', n.id, n.noticeNo) + ' ' + A.badge(n.status) : '—'; } },
+        { label: 'Payment due', html: function (c) { return c.paymentDueAt && !c.paidAt ? A.fmtDate(c.paymentDueAt) : c.paidAt ? 'Paid ' + A.fmtDate(c.paidAt) : '—'; } },
+        { label: 'Status', html: function (c) { return A.badge(c.status) + (c.referralReason ? '<br><span class="muted">' + A.esc(c.referralReason) + '</span>' : ''); } }
+      ], rows, 'No enforcement cases match these filters');
+    }
+    ['q', 'st'].forEach(function (id) { document.getElementById(id).addEventListener('input', draw); });
+    draw();
+  } });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard · VCS3 prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<!-- SCR-01 Dashboard (US-001, US-021, US-026) + prototype guide -->
+<main id="main" class="app-main" tabindex="-1">
+  <div class="page-banner"><div class="breadcrumb">Operations</div><h1>Breeding situation dashboard</h1>
+    <div class="actions"><button type="button" class="btn btn-secondary" id="assignBtn">Assign inspection</button></div></div>
+  <div class="page-content" id="content"></div>
+</main>
+<script src="data/seed.js"></script>
+<script src="js/store.js"></script>
+<script src="js/rules.js"></script>
+<script src="js/workflow.js"></script>
+<script src="js/app.js"></script>
+<script>
+(function () {
+  var S = VCS.store, R = VCS.rules, A = VCS.app;
+  var u = S.currentUser();
+  // FO / AO land on My work; the guide stays reachable at index.html#guide for every role
+  if (u.role !== 'OPS_MANAGER' && location.hash !== '#guide') { location.replace('my-work.html'); return; }
+
+  A.init({ page: 'index', render: function () {
+    var clusters = R.BR017_clusters(), active = clusters.filter(function (c) { return c.status === 'Active'; });
+    var red = active.filter(function (c) { return c.alertLevel === 'Red'; }).length;
+    var findings = R.breedingFindingsSince(7);
+    var hr = R.BR006_highRiskPremises();
+    var pending = S.list('notices', function (n) { return n.status === 'Pending Approval'; });
+    var overdueAppr = pending.filter(R.BR020_isApprovalOverdue);
+    var awaitingPay = S.list('enforcementCases', function (c) { return c.status === 'Awaiting Payment'; });
+    var dueSoon = awaitingPay.filter(function (c) { return R.daysBetween(R.today(), c.paymentDueAt) <= 3; });
+    var pastDue = S.list('inspections', R.isInspectionOverdue);
+    var isOM = u.role === 'OPS_MANAGER';
+
+    var html = '';
+    if (isOM) {
+      html += '<div class="kpi-grid">' +
+        '<a class="kpi is-danger" href="surveillance.html"><span class="kpi-label">Active dengue clusters</span><span class="kpi-value">' + active.length + '</span><span class="kpi-sub">' + A.alertLevel('Red') + ' ' + red + ' &nbsp;' + A.alertLevel('Yellow') + ' ' + (active.length - red) + '</span></a>' +
+        '<a class="kpi is-warning" href="inspections.html?breeding=7"><span class="kpi-label">Breeding findings, last 7 days</span><span class="kpi-value">' + findings.length + '</span><span class="kpi-sub muted">positive larval samples</span></a>' +
+        '<a class="kpi is-danger" href="high-risk.html"><span class="kpi-label">High-risk premises</span><span class="kpi-value">' + hr.length + '</span><span class="kpi-sub muted">of ' + S.list('premises').length + ' premises</span></a>' +
+        '<a class="kpi" href="notices.html?status=Pending%20Approval"><span class="kpi-label">Notices pending approval</span><span class="kpi-value">' + pending.length + '</span><span class="kpi-sub">' + (overdueAppr.length ? A.overdue(overdueAppr.length + ' overdue') : '<span class="muted">none overdue</span>') + '</span></a>' +
+        '<a class="kpi is-success" href="cases.html?status=Awaiting%20Payment"><span class="kpi-label">Fines awaiting payment</span><span class="kpi-value">' + awaitingPay.length + '</span><span class="kpi-sub muted">' + dueSoon.length + ' due within 3 days</span></a>' +
+        '<a class="kpi is-warning" href="inspections.html?overdue=1"><span class="kpi-label">Inspections past due</span><span class="kpi-value">' + pastDue.length + '</span><span class="kpi-sub muted">assigned, not yet visited</span></a>' +
+        '</div>';
+
+      html += '<div class="grid-2"><div class="card"><div class="card-head"><h2>Dengue clusters</h2><a href="surveillance.html">All clusters and feeds</a></div>' +
+        A.table([
+          { label: 'Cluster', html: function (c) { return '<strong>' + c.id + '</strong>'; } },
+          { label: 'Alert level', html: function (c) { return A.alertLevel(c.alertLevel); } },
+          { label: 'Cases', num: true, html: function (c) { return c.caseCount; } },
+          { label: 'Last onset', html: function (c) { return A.fmtDate(c.lastOnset); } },
+          { label: 'Area (postal)', html: function (c) { return A.esc(c.postalCode); } },
+          { label: 'Premises at risk', num: true, html: function (c) { return hr.filter(function (x) { return x.reasons.some(function (r) { return r.text.indexOf(c.id) >= 0; }); }).length; } }
+        ], active, 'No active clusters') + '<p class="muted" style="margin-top:8px">Clusters are derived from dengue case data (BR-017). Red = ' + S.config().redAlertMinCases + '+ cases (BR-018). A cluster closes ' + S.config().clusterWindowDays + ' days after its last onset (BR-019).</p></div>';
+
+      var work = [];
+      overdueAppr.forEach(function (n) { work.push({ what: 'Approval overdue', link: A.link('Notice', n.id, n.noticeNo), due: n.approvalDueAt }); });
+      pastDue.forEach(function (i) { work.push({ what: i.isReinspection ? 'Re-inspection past due' : i.isRevisit ? 'Re-visit past due' : 'Inspection past due', link: A.link('Inspection', i.id), due: i.dueDate }); });
+      dueSoon.forEach(function (c) { work.push({ what: 'Payment due soon', link: A.link('EnforcementCase', c.id), due: c.paymentDueAt }); });
+      work.sort(function (a, b) { return a.due < b.due ? -1 : 1; });
+      html += '<div class="card"><div class="card-head"><h2>Needs attention</h2></div>' +
+        A.table([
+          { label: 'Item', html: function (w) { return w.link; } },
+          { label: 'Why', html: function (w) { return A.esc(w.what); } },
+          { label: 'Due', html: function (w) { return A.fmtDate(w.due) + (w.due < R.today() ? A.overdue() : ''); } }
+        ], work, 'Nothing overdue') + '</div></div>';
+    } else {
+      html += '<div class="banner banner-info"><div><strong>The dashboard is for the Operations Manager</strong>You are acting as ' + A.esc(u.name) + '. Switch role in the header to see it.</div></div>';
+    }
+
+    // Prototype guide (p4-01 landing content)
+    var screens = [
+      ['index.html', 'SCR-01 Dashboard', 'Operations Manager'], ['my-work.html', 'SCR-02 My work', 'All roles'],
+      ['high-risk.html', 'SCR-03 High-risk premises', 'Operations Manager'], ['premises.html', 'SCR-04 Premises', 'All roles'],
+      ['premises-detail.html?id=PRM-0010', 'SCR-05 Premises detail (3rd-offence premises)', 'All roles'], ['inspections.html', 'SCR-06 Inspections', 'Field Officer, Operations Manager'],
+      ['inspection.html?id=INS-0051', 'SCR-08 Inspection (assigned, Jurong West)', 'Field Officer'], ['notices.html', 'SCR-09 Notices', 'All roles'],
+      ['notice.html?id=NTC-0014', 'SCR-10 Notice (overdue approval)', 'Approving Officer'], ['cases.html', 'SCR-11 Enforcement cases', 'All roles'],
+      ['case.html?id=ENF-0010', 'SCR-12 Enforcement case (3 charges, $600)', 'All roles'], ['surveillance.html', 'SCR-13 Dengue & surveillance', 'Operations Manager'],
+      ['statistics.html', 'SCR-14 Statistics', 'Approving Officer, Operations Manager']
+    ];
+    html += '<div class="card" id="guide"><div class="card-head"><h2>Prototype guide</h2><span class="flag flag-simulated">Internal mockup</span></div>' +
+      '<p>This is a clickable prototype of VCS3 that enforces the agreed business rules (PRD v2, BR-001 to BR-028). All data is synthetic, and the demo date starts at <strong>Fri 9 Oct 2026</strong>.</p>' +
+      '<ul><li><strong>Switch role</strong> with "Acting as" in the header. Login is simulated.</li>' +
+      '<li><strong>Demo date</strong>: click the date in the header (Operations Manager) to move time forward and see overdue rules fire.</li>' +
+      '<li><strong>Reset, Export, Import</strong>: the ⋮ menu. Reset before each demo.</li>' +
+      '<li>SCR-07 (Assign), SCR-15 (Notifications) and SCR-16 (Demo controls) are modals and menus available from the header and lists.</li></ul>' +
+      A.table([
+        { label: 'Screen', html: function (s) { return '<a href="' + s[0] + '">' + A.esc(s[1]) + '</a>'; } },
+        { label: 'Main role', html: function (s) { return A.esc(s[2]); } }
+      ], screens) + '</div>';
+
+    document.getElementById('content').innerHTML = html;
+    var ab = document.getElementById('assignBtn');
+    if (isOM) ab.addEventListener('click', function () { A.assignModal(); }); else ab.remove();
+  } });
+})();
+</script>
+</body>
+</html>

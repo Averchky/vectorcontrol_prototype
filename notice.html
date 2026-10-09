@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notice · VCS3 prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<!-- SCR-10 Notice (US-010 to US-014, US-027) -->
+<main id="main" class="app-main" tabindex="-1">
+  <div class="page-banner"><div class="breadcrumb"><a href="notices.html">Notices</a> › <span id="crumb"></span></div><h1 id="pageTitle">Notice</h1>
+    <div class="actions" id="bannerActions"></div></div>
+  <div class="page-content" id="content"></div>
+</main>
+<script src="data/seed.js"></script>
+<script src="js/store.js"></script>
+<script src="js/rules.js"></script>
+<script src="js/workflow.js"></script>
+<script src="js/app.js"></script>
+<script>
+(function () {
+  var S = VCS.store, R = VCS.rules, A = VCS.app;
+  A.init({ page: 'notice', render: function () {
+    var n = S.get('notices', A.qs('id'));
+    var content = document.getElementById('content');
+    if (!n) { content.innerHTML = '<div class="empty-state"><h2>Notice not found</h2><p><a href="notices.html">Back to notices</a></p></div>'; return; }
+    var u = S.currentUser(), c = S.get('enforcementCases', n.enforcementCaseId), ins = S.get('inspections', c.inspectionId);
+    var p = S.get('premises', c.premisesId), o = S.get('ownerOccupiers', p.ownerOccupierId);
+    if (u.role === 'FIELD_OFFICER' && n.draftedBy !== u.id && ins.assignedTo !== u.id) { // BR-025 (D-050), gap G-1
+      document.getElementById('crumb').textContent = n.noticeNo;
+      content.innerHTML = '<div class="empty-state"><div class="empty-icon" aria-hidden="true">🔒</div><h2>Not assigned to you</h2><p>Field Officers can only open notices they drafted or that come from their own inspections (BR-025).</p><p><a class="btn btn-primary" href="my-work.html">Go to My work</a></p></div>';
+      return;
+    }
+    document.title = 'Notice ' + n.noticeNo + ' · VCS3 prototype';
+    document.getElementById('pageTitle').textContent = 'Notice ' + n.noticeNo;
+    document.getElementById('crumb').textContent = n.noticeNo;
+    var editable = (n.status === 'Draft' || n.status === 'Returned') && n.draftedBy === u.id; // BR-012
+    var replaced = S.list('notices', function (x) { return x.replacesNoticeId === n.id; })[0];
+
+    var html = '';
+    if (n.status === 'Returned') html += '<div class="banner banner-warning" role="status"><div><strong>Returned for correction (BR-011)</strong>' + A.esc(n.returnReason) + '</div></div>';
+    if (R.BR020_isApprovalOverdue(n)) html += '<div class="banner banner-danger"><div><strong>Approval overdue (BR-020)</strong>Was due ' + A.fmtDate(n.approvalDueAt) + ', ' + R.daysBetween(n.approvalDueAt, R.today()) + ' day(s) ago.</div></div>';
+    if (n.status === 'Withdrawn') html += '<div class="banner banner-info"><div><strong>Withdrawn ' + A.fmtDate(n.withdrawnAt) + '</strong>' + A.esc(n.withdrawReason) + (replaced ? '<br>Replaced by ' + A.link('Notice', replaced.id, replaced.noticeNo) + '.' : '') + '</div></div>';
+    if (n.noticeType === 'Notice to Abate') html += '<div class="banner banner-danger"><div><strong>Offence no. ' + c.offenceCount + ': Notice to Abate (BR-014)</strong>No composition fine is offered. Serving this notice refers the case for prosecution.</div></div>';
+
+    html += '<div class="grid-2"><div>';
+    html += '<div class="card"><div class="card-head"><h2>' + A.badge(n.status) + '</h2>' + (n.replacesNoticeId ? '<span class="muted">Reissue of ' + A.link('Notice', n.replacesNoticeId, S.get('notices', n.replacesNoticeId).noticeNo) + '</span>' : '') + '</div><dl class="dl-grid">' +
+      '<div><dt>Notice type</dt><dd>' + A.esc(n.noticeType) + '</dd></div>' +
+      '<div><dt>Enforcement case</dt><dd>' + A.link('EnforcementCase', c.id) + ' ' + A.badge(c.status) + '</dd></div>' +
+      '<div><dt>Premises</dt><dd>' + A.premisesLink(p.id) + '</dd></div>' +
+      '<div><dt>Owner / Occupier</dt><dd>' + A.esc(o.name) + '</dd></div>' +
+      '<div><dt>Offence no. (BR-015)</dt><dd>' + c.offenceCount + '</dd></div>' +
+      '<div><dt>Inspection</dt><dd>' + A.link('Inspection', ins.id) + ', ' + A.fmtDate(ins.visitedAt) + '</dd></div>' +
+      '<div><dt>Drafted by</dt><dd>' + A.esc(A.userName(n.draftedBy)) + '</dd></div>' +
+      (n.submittedAt ? '<div><dt>Submitted</dt><dd>' + A.fmtDateTime(n.submittedAt) + '</dd></div>' : '') +
+      (n.status === 'Pending Approval' ? '<div><dt>Approval due (BR-020)</dt><dd>' + A.fmtDate(n.approvalDueAt) + (R.BR020_isApprovalOverdue(n) ? A.overdue() : '') + '</dd></div>' : '') +
+      (n.approvedBy ? '<div><dt>Approved by</dt><dd>' + A.esc(A.userName(n.approvedBy)) + ', ' + A.fmtDate(n.approvedAt) + '</dd></div>' : '') +
+      (n.servedAt ? '<div><dt>Served</dt><dd>' + A.fmtDate(n.servedAt) + ' · ' + A.esc(n.serviceMethod) + '</dd></div><div><dt>E-filed (BR-004)</dt><dd>' + A.fmtDateTime(n.filedAt) + '</dd></div>' : '') +
+      '</dl></div>';
+
+    html += '<div class="card"><div class="card-head"><h2>Charges</h2><span class="muted">One per positive habitat (BR-028)</span></div>' +
+      '<div class="table-wrap"><table class="table table-stack"><thead><tr><th scope="col">No.</th><th scope="col">Habitat</th><th scope="col">Location in premises</th><th scope="col">Sample</th><th scope="col" class="num">Composition fine</th></tr></thead><tbody>' +
+      n.charges.map(function (ch) {
+        var s = S.get('larvalSamples', ch.larvalSampleId);
+        var loc = editable ? '<label class="sr-only" for="loc-' + s.id + '">Location for charge ' + ch.chargeNo + '</label><input class="input" id="loc-' + s.id + '" data-loc="' + s.id + '" value="' + A.esc(s.habitatLocation) + '" maxlength="120">' : A.esc(s.habitatLocation);
+        return '<tr><td data-label="No.">' + ch.chargeNo + '</td><td data-label="Habitat">' + A.esc(ch.habitatType) + '</td><td data-label="Location">' + loc + '</td><td data-label="Sample"><span class="mono">' + A.esc(s.sampleNo) + '</span></td><td data-label="Composition fine" class="num">' + (n.noticeType === 'Notice to Abate' ? '— (BR-014)' : A.money(ch.fineAmount)) + '</td></tr>';
+      }).join('') + '</tbody><tfoot><tr><td colspan="4">Total (' + n.charges.length + ' charge' + (n.charges.length > 1 ? 's' : '') + ')</td><td class="num">' + A.money(n.totalFine) + '</td></tr></tfoot></table></div>' +
+      '<p class="muted" style="margin-top:8px">Fine per charge: ' + (n.noticeType === 'Notice to Abate' ? 'none, offence no. ' + c.offenceCount + ' (BR-014)' : A.money(n.charges[0].fineAmount) + ' for a ' + (p.premisesType === 'Residential' ? 'residential' : 'non-residential') + ' premises, offence no. ' + c.offenceCount + ' (BR-013, ⚙ placeholder amounts)') + '. The amounts are calculated and cannot be edited.</p>' +
+      (editable ? '<div class="btn-group"><button type="button" class="btn btn-secondary" id="saveLoc">Save locations</button></div>' : '') + '</div>';
+
+    // Notice preview (HTML only; no PDF) with prototype watermark (D-045)
+    html += '<div class="card"><div class="card-head"><h2>Notice preview</h2><button type="button" class="btn btn-secondary" id="pdfBtn">Download PDF</button></div>' +
+      '<div class="notice-doc"><div class="doc-head"><img src="img/nea-logo.png" alt="National Environment Agency"><div style="text-align:right"><div class="watermark">PROTOTYPE – NOT AN OFFICIAL NOTICE</div><div>' + A.esc(n.noticeNo) + '</div><div>' + A.fmtDate(n.servedAt || n.approvedAt || n.submittedAt || n.createdAt) + '</div></div></div>' +
+      '<p><strong>To:</strong> ' + A.esc(o.name) + '<br>' + A.esc(p.address) + ', Singapore ' + A.esc(p.postalCode) + '</p>' +
+      '<h3 style="text-transform:uppercase;letter-spacing:.04em">' + A.esc(n.noticeType) + '</h3>' +
+      '<p>On ' + A.fmtDate(ins.visitedAt) + ', an officer found mosquito breeding at the premises above. The larvae were confirmed by laboratory analysis. <span class="placeholder">⚙ Legal wording and the statutory reference are to be supplied by NEA.</span></p>' +
+      '<ol>' + n.charges.map(function (ch) { var s = S.get('larvalSamples', ch.larvalSampleId); return '<li>' + A.esc(ch.habitatType) + ' at ' + A.esc(s.habitatLocation) + ' (sample ' + A.esc(s.sampleNo) + ')' + (n.noticeType === 'Notice of Offence' ? ': ' + A.money(ch.fineAmount) : '') + '</li>'; }).join('') + '</ol>' +
+      (n.noticeType === 'Notice of Offence'
+        ? '<p>You may settle this offence by paying a composition fine of <strong>' + A.money(n.totalFine) + '</strong> within ' + S.config().paymentDueDays + ' days of this notice' + (c.paymentDueAt ? ' (by ' + A.fmtDate(c.paymentDueAt) + ')' : '') + '. <span class="placeholder">⚙ Payment channels to be supplied.</span></p>'
+        : '<p>No composition fine is offered for this offence. <span class="placeholder">⚙ Abatement requirements and court process wording to be supplied by NEA.</span></p>') +
+      '<p class="muted">Synthetic data · internal VCS3 prototype</p></div></div>';
+
+    html += '</div><aside><div class="card"><div class="card-head"><h2>History</h2></div>' + A.timeline([['Notice', n.id]]) + '</div></aside></div>';
+    content.innerHTML = html;
+
+    A.renderActions(document.getElementById('bannerActions'), 'Notice', n, function (res) {
+      if (res.id && res.id !== n.id && /^NTC-/.test(res.id)) location.href = 'notice.html?id=' + res.id; else location.reload();
+    });
+    document.getElementById('pdfBtn').addEventListener('click', function () { A.notInScope('PDF notices'); });
+    var save = document.getElementById('saveLoc');
+    if (save) save.addEventListener('click', function () {
+      var changed = 0, bad = false;
+      content.querySelectorAll('[data-loc]').forEach(function (inp) {
+        var s = S.get('larvalSamples', inp.getAttribute('data-loc')), v = inp.value.trim();
+        if (v.length < 2) { bad = true; inp.setAttribute('aria-invalid', 'true'); return; }
+        if (v !== s.habitatLocation) {
+          var was = s.habitatLocation;
+          S.update('larvalSamples', s.id, { habitatLocation: v });
+          S.audit('Notice', n.id, 'Edit charge location', n.status, n.status, 'Sample ' + s.sampleNo + ': "' + was + '" → "' + v + '"');
+          changed++;
+        }
+      });
+      if (bad) { A.toast('Each location needs at least 2 characters (BR-008).', true); return; }
+      sessionStorage.setItem('vcs3.toast', changed ? changed + ' location(s) updated.' : 'No changes.');
+      location.reload();
+    });
+  } });
+})();
+</script>
+</body>
+</html>

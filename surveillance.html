@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dengue and surveillance · VCS3 prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<!-- SCR-13 Dengue & surveillance (US-020, US-021) -->
+<main id="main" class="app-main" tabindex="-1">
+  <div class="page-banner"><div class="breadcrumb">Operations</div><h1>Dengue and surveillance</h1></div>
+  <div class="page-content" id="content"></div>
+</main>
+<script src="data/seed.js"></script>
+<script src="js/store.js"></script>
+<script src="js/rules.js"></script>
+<script src="js/workflow.js"></script>
+<script src="js/app.js"></script>
+<script>
+(function () {
+  var S = VCS.store, R = VCS.rules, A = VCS.app;
+  A.init({ page: 'surveillance', roles: ['OPS_MANAGER'], render: function () {
+    var c = S.config(), clusters = R.BR017_clusters();
+    var html = '<div class="banner banner-info"><div><strong>Simulated feeds (D-017)</strong>Dengue cases and trap readings come from seed data. In VCS3 they would come from the case notification and surveillance systems.</div></div>';
+    html += '<div class="card"><div class="card-head"><h2>Dengue clusters</h2><span class="muted">Derived, not stored (DM-3)</span></div>' +
+      '<p class="muted">A cluster is ' + c.clusterMinCases + '+ cases with onsets within ' + c.clusterWindowDays + ' days and within ' + c.clusterRadiusMetres + ' m of each other (BR-017, DM-5). Red at ' + c.redAlertMinCases + '+ cases (BR-018). It closes when there has been no new onset for ' + c.clusterWindowDays + ' days (BR-019).</p>' +
+      A.table([
+        { label: 'Cluster', html: function (k) { return '<strong>' + k.id + '</strong>'; } },
+        { label: 'Status', html: function (k) { return k.status === 'Active' ? '<span class="badge badge-danger">Active</span>' : '<span class="badge badge-neutral">Closed</span>'; } },
+        { label: 'Alert level', html: function (k) { return A.alertLevel(k.alertLevel); } },
+        { label: 'Cases', num: true, html: function (k) { return k.caseCount; } },
+        { label: 'First onset', html: function (k) { return A.fmtDate(k.firstOnset); } },
+        { label: 'Last onset', html: function (k) { return A.fmtDate(k.lastOnset); } },
+        { label: 'Closes', html: function (k) { return k.status === 'Active' ? A.fmtDate(R.addDays(k.lastOnset, c.clusterWindowDays + 1)) + ' if no new case' : '—'; } },
+        { label: 'Area (postal)', html: function (k) { return A.esc(k.postalCode); } }
+      ], clusters, 'No clusters') + '</div>';
+
+    var cases = S.list('dengueCases', function (x) { return x.onsetDate <= R.today(); }).sort(function (a, b) { return a.onsetDate < b.onsetDate ? 1 : -1; });
+    html += '<div class="card"><div class="card-head"><h2>Dengue cases ' + A.simulated() + '</h2></div>' +
+      '<div class="toolbar">' + A.field('from', 'Onset from', '<input class="input" type="date" id="from" value="' + R.addDays(R.today(), -27) + '">') + A.field('to', 'Onset to', '<input class="input" type="date" id="to" value="' + R.today() + '">') + '</div>' +
+      '<div class="result-count" id="ccount" aria-live="polite"></div><div id="caseList"></div></div>';
+
+    var readings = S.list('surveillanceReadings');
+    var weeks = readings.map(function (r) { return r.readingDate; }).filter(function (v, i, a) { return a.indexOf(v) === i; }).sort();
+    var traps = readings.map(function (r) { return r.trapId; }).filter(function (v, i, a) { return a.indexOf(v) === i; }).sort();
+    html += '<div class="card"><div class="card-head"><h2>Mosquito trap readings by week ' + A.simulated() + '</h2></div>' +
+      '<div class="table-wrap"><table class="table"><thead><tr><th scope="col">Trap</th><th scope="col">Area</th>' + weeks.map(function (w) { return '<th scope="col" class="num">' + A.fmtDate(w).replace(/ \d{4}$/, '') + '</th>'; }).join('') + '<th scope="col">Trend</th></tr></thead><tbody>' +
+      traps.map(function (t) {
+        var rs = readings.filter(function (r) { return r.trapId === t; });
+        var counts = weeks.map(function (w) { var r = rs.filter(function (x) { return x.readingDate === w; })[0]; return r ? r.mosquitoCount : null; });
+        var first = counts[0], last = counts[counts.length - 1], trend = last > first * 1.25 ? '<span class="badge badge-danger">▲ Rising</span>' : last < first * 0.8 ? '<span class="badge badge-success">▼ Falling</span>' : '<span class="badge badge-neutral">► Stable</span>';
+        return '<tr><th scope="row">' + t + '</th><td>' + A.esc(rs[0].areaName) + '</td>' + counts.map(function (n) { return '<td class="num">' + (n === null ? '—' : n) + '</td>'; }).join('') + '<td>' + trend + '</td></tr>';
+      }).join('') + '</tbody></table></div><p class="muted" style="margin-top:8px">Readings are weekly mosquito counts per trap.</p></div>';
+    document.getElementById('content').innerHTML = html;
+
+    function drawCases() {
+      var f = document.getElementById('from').value, t = document.getElementById('to').value;
+      var rows = cases.filter(function (x) { return (!f || x.onsetDate >= f) && (!t || x.onsetDate <= t); });
+      document.getElementById('ccount').textContent = rows.length + ' of ' + cases.length + ' cases';
+      document.getElementById('caseList').innerHTML = A.table([
+        { label: 'Case', html: function (x) { return x.id; } },
+        { label: 'Onset', html: function (x) { return A.fmtDate(x.onsetDate); } },
+        { label: 'Notified', html: function (x) { return A.fmtDate(x.notifiedAt); } },
+        { label: 'Postal code', html: function (x) { return A.esc(x.postalCode); } },
+        { label: 'Cluster', html: function (x) { var k = R.clusterOfCase(x.id, clusters); return k ? k.id + ' ' + (k.alertLevel ? A.alertLevel(k.alertLevel) : '<span class="badge badge-neutral">Closed</span>') : '<span class="muted">Not clustered</span>'; } }
+      ], rows, 'No cases in this period');
+    }
+    ['from', 'to'].forEach(function (id) { document.getElementById(id).addEventListener('input', drawCases); });
+    drawCases();
+  } });
+})();
+</script>
+</body>
+</html>

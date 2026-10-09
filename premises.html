@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Premises · VCS3 prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<!-- SCR-04 Premises (US-019, US-024) -->
+<main id="main" class="app-main" tabindex="-1">
+  <div class="page-banner"><div class="breadcrumb">Records</div><h1>Premises</h1></div>
+  <div class="page-content" id="content"></div>
+</main>
+<script src="data/seed.js"></script>
+<script src="js/store.js"></script>
+<script src="js/rules.js"></script>
+<script src="js/workflow.js"></script>
+<script src="js/app.js"></script>
+<script>
+(function () {
+  var S = VCS.store, R = VCS.rules, A = VCS.app;
+  A.init({ page: 'premises', render: function () {
+    var clusters = R.BR017_clusters();
+    var rows0 = S.list('premises').map(function (p) { return { p: p, o: S.get('ownerOccupiers', p.ownerOccupierId), risk: R.BR016_riskReasons(p, clusters) }; });
+    document.getElementById('content').innerHTML =
+      '<div class="toolbar" role="search">' +
+      A.field('q', 'Search', '<input class="input" id="q" type="search" placeholder="Address, postal code, owner or ID" value="' + A.esc(A.qs('q') || '') + '">') +
+      A.field('ptype', 'Premises type', '<select class="select" id="ptype"><option value="">All types</option><option>Residential</option><option>Commercial</option><option>Construction Site</option><option>Institutional</option></select>') +
+      '<div class="field"><label class="choice" style="margin-top:22px"><input type="checkbox" id="hr"> High-risk only</label></div>' +
+      '</div><div class="result-count" id="count" aria-live="polite"></div><div id="list"></div>';
+    function draw() {
+      var q = document.getElementById('q').value, pt = document.getElementById('ptype').value, hr = document.getElementById('hr').checked;
+      var rows = rows0.filter(function (r) {
+        return A.matches(r.p.address + ' ' + r.p.postalCode + ' ' + r.o.name + ' ' + r.p.id, q) && (!pt || r.p.premisesType === pt) && (!hr || r.risk.length);
+      });
+      document.getElementById('count').textContent = rows.length + ' of ' + rows0.length + ' premises';
+      document.getElementById('list').innerHTML = A.table([
+        { label: 'Premises', html: function (r) { return A.link('Premises', r.p.id, r.p.address) + (r.risk.length ? A.highRisk() : ''); } },
+        { label: 'Postal code', html: function (r) { return A.esc(r.p.postalCode); } },
+        { label: 'Type', html: function (r) { return A.esc(r.p.premisesType); } },
+        { label: 'Owner / Occupier', html: function (r) { return A.esc(r.o.name); } },
+        { label: 'Offences (12 mths)', num: true, html: function (r) { return R.BR015_offenceCount(r.p.id, R.addDays(R.today(), 1)) - 1; } }
+      ], rows, 'No premises match your search');
+    }
+    ['q', 'ptype', 'hr'].forEach(function (id) { document.getElementById(id).addEventListener('input', draw); });
+    draw();
+  } });
+})();
+</script>
+</body>
+</html>

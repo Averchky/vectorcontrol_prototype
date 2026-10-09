@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Enforcement case · VCS3 prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<!-- SCR-12 Enforcement case (US-014 to US-018, US-027) -->
+<main id="main" class="app-main" tabindex="-1">
+  <div class="page-banner"><div class="breadcrumb"><a href="cases.html">Enforcement cases</a> › <span id="crumb"></span></div><h1 id="pageTitle">Enforcement case</h1>
+    <div class="actions" id="bannerActions"></div></div>
+  <div class="page-content" id="content"></div>
+</main>
+<script src="data/seed.js"></script>
+<script src="js/store.js"></script>
+<script src="js/rules.js"></script>
+<script src="js/workflow.js"></script>
+<script src="js/app.js"></script>
+<script>
+(function () {
+  var S = VCS.store, R = VCS.rules, A = VCS.app, W = VCS.workflow;
+  A.init({ page: 'case', render: function () {
+    var c = S.get('enforcementCases', A.qs('id'));
+    var content = document.getElementById('content');
+    if (!c) { content.innerHTML = '<div class="empty-state"><h2>Enforcement case not found</h2><p><a href="cases.html">Back to cases</a></p></div>'; return; }
+    var u = S.currentUser(), ins = S.get('inspections', c.inspectionId), p = S.get('premises', c.premisesId), o = S.get('ownerOccupiers', p.ownerOccupierId);
+    if (u.role === 'FIELD_OFFICER' && ins.assignedTo !== u.id) { // BR-025 (D-050), gap G-1
+      document.getElementById('crumb').textContent = c.id;
+      content.innerHTML = '<div class="empty-state"><div class="empty-icon" aria-hidden="true">🔒</div><h2>Not assigned to you</h2><p>Field Officers can only open enforcement cases from their own inspections (BR-025).</p><p><a class="btn btn-primary" href="my-work.html">Go to My work</a></p></div>';
+      return;
+    }
+    document.title = 'Enforcement case ' + c.id + ' · VCS3 prototype';
+    document.getElementById('pageTitle').textContent = 'Enforcement case ' + c.id;
+    document.getElementById('crumb').textContent = c.id;
+    var samples = S.list('larvalSamples', function (s) { return s.inspectionId === ins.id; });
+    var notices = S.list('notices', function (n) { return n.enforcementCaseId === c.id; }).sort(function (a, b) { return a.createdAt < b.createdAt ? -1 : 1; });
+    var latest = R.latestNotice(c.id);
+    var follow = S.list('inspections', function (i) { return i.enforcementCaseId === c.id; }).sort(function (a, b) { return a.createdAt < b.createdAt ? -1 : 1; });
+    var served = notices.filter(function (n) { return n.status === 'Served'; })[0];
+    var reDone = R.BR023_reinspectionDone(c);
+
+    var html = '';
+    if (c.status === 'Referred for Prosecution') html += '<div class="banner banner-danger"><div><strong>Referred for prosecution: ' + A.esc(c.referralReason) + '</strong>' + (c.referralReason === 'Fine unpaid' ? 'The fine was due ' + A.fmtDate(c.paymentDueAt) + ' and was not paid (BR-021).' : 'Offence no. ' + c.offenceCount + ' (BR-014). No composition fine offered.') + ' Prosecution is handled outside VCS3. The re-inspection still runs (D-025).</div></div>';
+    if (c.status === 'Cancelled') html += '<div class="banner banner-info"><div><strong>Cancelled (BR-027)</strong>' + A.esc(c.cancelReason) + ' This case does not count as an offence and is excluded from statistics.</div></div>';
+    if (c.status === 'Open' && latest && latest.status === 'Withdrawn') html += '<div class="banner banner-warning"><div><strong>Latest notice withdrawn</strong>A Field Officer can reissue the notice, or an Approving Officer can cancel the case (BR-027).</div></div>';
+    if (R.BR021_isPaymentOverdue(c)) html += '<div class="banner banner-danger"><div><strong>Payment overdue</strong></div></div>';
+
+    html += '<div class="grid-2"><div>';
+    html += '<div class="card"><div class="card-head"><h2>' + A.badge(c.status) + '</h2></div><dl class="dl-grid">' +
+      '<div><dt>Premises</dt><dd>' + A.premisesLink(p.id) + '</dd></div><div><dt>Premises type</dt><dd>' + A.esc(p.premisesType) + '</dd></div>' +
+      '<div><dt>Owner / Occupier</dt><dd>' + A.esc(o.name) + '</dd></div><div><dt>Offence no. (BR-015)</dt><dd>' + c.offenceCount + '</dd></div>' +
+      '<div><dt>Inspection</dt><dd>' + A.link('Inspection', ins.id) + ', visited ' + A.fmtDate(ins.visitedAt) + '</dd></div>' +
+      '<div><dt>Inspecting officer</dt><dd>' + A.esc(A.userName(ins.assignedTo)) + '</dd></div>' +
+      '<div><dt>Opened</dt><dd>' + A.fmtDateTime(c.createdAt) + '</dd></div>' + (c.closedAt ? '<div><dt>Closed</dt><dd>' + A.fmtDateTime(c.closedAt) + '</dd></div>' : '') +
+      '</dl></div>';
+
+    html += '<div class="card"><div class="card-head"><h2>Breeding findings</h2></div>' + A.table([
+      { label: 'Sample', html: function (s) { return '<span class="mono">' + A.esc(s.sampleNo) + '</span>'; } },
+      { label: 'Habitat', html: function (s) { return A.esc(s.habitatType) + '<br><span class="muted">' + A.esc(s.habitatLocation) + '</span>'; } },
+      { label: 'Lab result', html: function (s) { return A.badge(s.status) + (s.species ? ' <em class="muted">' + A.esc(s.species) + '</em>' : ''); } }
+    ], samples) + '</div>';
+
+    html += '<div class="card"><div class="card-head"><h2>Notices</h2></div>' + A.table([
+      { label: 'Notice no.', html: function (n) { return A.link('Notice', n.id, n.noticeNo) + (n.replacesNoticeId ? '<br><span class="muted">reissue</span>' : ''); } },
+      { label: 'Type', html: function (n) { return A.esc(n.noticeType); } },
+      { label: 'Charges', num: true, html: function (n) { return n.charges.length; } },
+      { label: 'Total fine', num: true, html: function (n) { return A.money(n.totalFine); } },
+      { label: 'Status', html: function (n) { return A.badge(n.status) + (R.BR020_isApprovalOverdue(n) ? A.overdue() : ''); } }
+    ], notices, 'No notices') + '</div>';
+
+    var payment = '<div><dt>Composition fine</dt><dd>' + (served ? (served.noticeType === 'Notice to Abate' ? 'None (BR-014)' : A.money(served.totalFine)) : 'Notice not served yet') + '</dd></div>';
+    if (c.paymentDueAt) payment += '<div><dt>Payment due (BR-021)</dt><dd>' + A.fmtDate(c.paymentDueAt) + (R.BR021_isPaymentOverdue(c) ? A.overdue() : '') + '</dd></div>';
+    if (c.paidAt) payment += '<div><dt>Paid</dt><dd>' + A.fmtDateTime(c.paidAt) + ' <span class="flag flag-simulated">Simulated</span></dd></div>';
+    html += '<div class="card"><div class="card-head"><h2>Payment and follow-up</h2></div><dl class="dl-grid">' + payment +
+      '<div><dt>Re-inspection (BR-022)</dt><dd>' + (follow.length ? follow.map(function (i) { return A.link('Inspection', i.id) + ' ' + A.badge(i.status) + (i.status === 'Assigned' ? ' <span class="muted">due ' + A.fmtDate(i.dueDate) + '</span>' + (R.isInspectionOverdue(i) ? A.overdue() : '') : ''); }).join('<br>') : 'Scheduled when the notice is served') + '</dd></div></dl>' +
+      (['Awaiting Payment', 'Awaiting Re-inspection'].indexOf(c.status) >= 0 ? '<p class="muted" style="margin-top:12px">Closes when the fine is paid <strong>and</strong> the re-inspection is completed (BR-023): payment ' + (c.paidAt ? '✓ done' : '○ pending') + ', re-inspection ' + (reDone ? '✓ done' : '○ pending') + '.</p>' : '') + '</div>';
+
+    html += '</div><aside><div class="card"><div class="card-head"><h2>History</h2></div>' +
+      A.timeline([['EnforcementCase', c.id]].concat(notices.map(function (n) { return ['Notice', n.id]; }))) + '</div></aside></div>';
+    content.innerHTML = html;
+
+    // case actions + reissue (lives on the latest withdrawn Notice)
+    var ba = document.getElementById('bannerActions');
+    A.renderActions(ba, 'EnforcementCase', c);
+    if (latest && latest.status === 'Withdrawn' && W.canTransition(u, 'Notice', latest, 'reissue').ok) {
+      var holder = document.createElement('span'); ba.appendChild(holder);
+      A.renderActions(holder, 'Notice', latest, function (res) { location.href = 'notice.html?id=' + res.id; });
+    }
+  } });
+})();
+</script>
+</body>
+</html>

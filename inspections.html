@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inspections · VCS3 prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<!-- SCR-06 Inspections (US-003, US-024) -->
+<main id="main" class="app-main" tabindex="-1">
+  <div class="page-banner"><div class="breadcrumb">Records</div><h1>Inspections</h1><div class="actions" id="bannerActions"></div></div>
+  <div class="page-content" id="content"></div>
+</main>
+<script src="data/seed.js"></script>
+<script src="js/store.js"></script>
+<script src="js/rules.js"></script>
+<script src="js/workflow.js"></script>
+<script src="js/app.js"></script>
+<script>
+(function () {
+  var S = VCS.store, R = VCS.rules, A = VCS.app;
+  A.init({ page: 'inspections', roles: ['FIELD_OFFICER', 'OPS_MANAGER'], render: function () {
+    var u = S.currentUser();
+    var all = R.BR025_visibleInspections(u); // BR-025
+    var statuses = ['Assigned', 'Completed – No Breeding', 'Completed – Breeding Found', 'No Access', 'Cancelled'];
+    var officers = S.list('users', function (x) { return x.role === 'FIELD_OFFICER' || S.list('inspections', function (i) { return i.assignedTo === x.id; }).length; });
+    var breedingDays = A.qs('breeding');
+    document.getElementById('content').innerHTML =
+      (u.role === 'FIELD_OFFICER' ? '<p class="muted">You see the inspections assigned to you (BR-025).</p>' : '') +
+      (breedingDays ? '<div class="banner banner-info"><div><strong>Filtered: breeding found in the last ' + A.esc(breedingDays) + ' days</strong><a href="inspections.html">Clear filter</a></div></div>' : '') +
+      '<div class="toolbar" role="search">' +
+      A.field('q', 'Search', '<input class="input" id="q" type="search" placeholder="ID, address, postal code or owner">') +
+      A.field('st', 'Status', '<select class="select" id="st"><option value="">All statuses</option>' + statuses.map(function (s) { return '<option>' + s + '</option>'; }).join('') + '</select>') +
+      (u.role === 'OPS_MANAGER' ? A.field('of', 'Officer', '<select class="select" id="of"><option value="">All officers</option>' + officers.map(function (o) { return '<option value="' + o.id + '">' + A.esc(o.name) + '</option>'; }).join('') + '</select>') : '') +
+      '<div class="field"><label class="choice" style="margin-top:22px"><input type="checkbox" id="od"' + (A.qs('overdue') ? ' checked' : '') + '> Past due only</label></div>' +
+      '</div><div class="result-count" id="count" aria-live="polite"></div><div id="list"></div>';
+    function draw() {
+      var q = document.getElementById('q').value, st = document.getElementById('st').value, ofEl = document.getElementById('of'), of = ofEl ? ofEl.value : '', od = document.getElementById('od').checked;
+      var from = breedingDays ? R.addDays(R.today(), -(+breedingDays - 1)) : null;
+      var rows = all.filter(function (i) {
+        var p = S.get('premises', i.premisesId), o = S.get('ownerOccupiers', p.ownerOccupierId);
+        if (from && !(i.visitedAt && i.visitedAt.slice(0, 10) >= from && S.list('larvalSamples', function (s) { return s.inspectionId === i.id && s.status === 'Positive'; }).length)) return false;
+        return A.matches(i.id + ' ' + p.address + ' ' + p.postalCode + ' ' + o.name, q) && (!st || i.status === st) && (!of || i.assignedTo === of) && (!od || R.isInspectionOverdue(i));
+      }).sort(function (a, b) { var x = a.visitedAt || a.dueDate, y = b.visitedAt || b.dueDate; return x < y ? 1 : -1; });
+      document.getElementById('count').textContent = rows.length + ' of ' + all.length + ' inspections';
+      document.getElementById('list').innerHTML = A.table([
+        { label: 'Inspection', html: function (i) { return A.link('Inspection', i.id); } },
+        { label: 'Premises', html: function (i) { return A.premisesLink(i.premisesId); } },
+        { label: 'Kind', html: function (i) { return i.isReinspection ? 'Re-inspection' : i.isRevisit ? 'Re-visit' : 'Inspection'; } },
+        { label: 'Officer', html: function (i) { return A.esc(A.userName(i.assignedTo)); } },
+        { label: 'Due / visited', html: function (i) { return i.visitedAt ? 'Visited ' + A.fmtDate(i.visitedAt) : 'Due ' + A.fmtDate(i.dueDate) + (R.isInspectionOverdue(i) ? A.overdue() : ''); } },
+        { label: 'Status', html: function (i) { return A.badge(i.status); } }
+      ], rows, 'No inspections match these filters');
+    }
+    ['q', 'st', 'of', 'od'].forEach(function (id) { var el = document.getElementById(id); if (el) el.addEventListener('input', draw); });
+    draw();
+    if (u.role === 'OPS_MANAGER') {
+      var ba = document.getElementById('bannerActions');
+      ba.innerHTML = '<button type="button" class="btn btn-secondary" id="assignBtn">Assign inspection</button>';
+      document.getElementById('assignBtn').addEventListener('click', function () { A.assignModal(); });
+    }
+  } });
+})();
+</script>
+</body>
+</html>

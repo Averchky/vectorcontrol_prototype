@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>High-risk premises · VCS3 prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<!-- SCR-03 High-risk premises (US-002) -->
+<main id="main" class="app-main" tabindex="-1">
+  <div class="page-banner"><div class="breadcrumb">Operations</div><h1>High-risk premises</h1></div>
+  <div class="page-content" id="content"></div>
+</main>
+<script src="data/seed.js"></script>
+<script src="js/store.js"></script>
+<script src="js/rules.js"></script>
+<script src="js/workflow.js"></script>
+<script src="js/app.js"></script>
+<script>
+(function () {
+  var S = VCS.store, R = VCS.rules, A = VCS.app;
+  A.init({ page: 'high-risk', roles: ['OPS_MANAGER'], render: function () {
+    var c = S.config();
+    var all = R.BR006_highRiskPremises();
+    var content = document.getElementById('content');
+    content.innerHTML =
+      '<p>A premises is <strong>high-risk</strong> when any of these is true (BR-016): (a) it is within ' + c.clusterRadiusMetres + ' m of a case in an active dengue cluster; (b) breeding was confirmed there in the last ' + c.highRiskBreedingDays + ' days; (c) it is a construction site.</p>' +
+      '<div class="toolbar" role="search">' +
+      A.field('q', 'Search', '<input class="input" id="q" type="search" placeholder="Address, postal code or owner">') +
+      A.field('reason', 'Reason', '<select class="select" id="reason"><option value="">All reasons</option><option value="cluster">In active cluster</option><option value="breeding">Recent breeding</option><option value="construction">Construction site</option></select>') +
+      A.field('ptype', 'Premises type', '<select class="select" id="ptype"><option value="">All types</option><option>Residential</option><option>Commercial</option><option>Construction Site</option><option>Institutional</option></select>') +
+      A.field('open', 'Open inspection', '<select class="select" id="open"><option value="">Any</option><option value="none">No open inspection</option></select>') +
+      '</div><div class="result-count" id="count" aria-live="polite"></div><div id="list"></div>';
+    function draw() {
+      var q = document.getElementById('q').value, rs = document.getElementById('reason').value, pt = document.getElementById('ptype').value, op = document.getElementById('open').value;
+      var rows = all.filter(function (x) {
+        var p = x.premises, o = S.get('ownerOccupiers', p.ownerOccupierId);
+        var open = S.list('inspections', function (i) { return i.premisesId === p.id && i.status === 'Assigned'; }).length;
+        return A.matches(p.address + ' ' + p.postalCode + ' ' + o.name + ' ' + p.id, q) && (!rs || x.reasons.some(function (r) { return r.code === rs; })) &&
+          (!pt || p.premisesType === pt) && (!op || !open);
+      });
+      document.getElementById('count').textContent = rows.length + ' of ' + all.length + ' high-risk premises';
+      document.getElementById('list').innerHTML = A.table([
+        { label: 'Premises', html: function (x) { return A.premisesLink(x.premises.id) + '<br><span class="muted">' + A.esc(x.premises.postalCode) + '</span>'; } },
+        { label: 'Type', html: function (x) { return A.esc(x.premises.premisesType); } },
+        { label: 'Why high-risk', html: function (x) { return x.reasons.map(function (r) { return '<span class="chip">' + A.esc(r.text) + '</span>'; }).join(''); } },
+        { label: 'Open inspection', html: function (x) {
+          var o = S.list('inspections', function (i) { return i.premisesId === x.premises.id && i.status === 'Assigned'; })[0];
+          return o ? A.link('Inspection', o.id) + ' <span class="muted">due ' + A.fmtDate(o.dueDate) + '</span>' : '<span class="muted">None</span>';
+        } },
+        { label: 'Action', html: function (x) { return '<button type="button" class="btn btn-secondary" data-assign="' + x.premises.id + '">Assign inspection</button>'; } }
+      ], rows, 'No premises match these filters');
+      document.querySelectorAll('[data-assign]').forEach(function (b) { b.addEventListener('click', function () { A.assignModal(b.getAttribute('data-assign')); }); });
+    }
+    ['q', 'reason', 'ptype', 'open'].forEach(function (id) { document.getElementById(id).addEventListener('input', draw); });
+    draw();
+  } });
+})();
+</script>
+</body>
+</html>

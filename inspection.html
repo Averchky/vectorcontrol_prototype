@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inspection · VCS3 prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<!-- SCR-08 Inspection: record a visit, habitats and lab results; mobile-first (US-005 to US-009, US-017, US-027) -->
+<main id="main" class="app-main" tabindex="-1">
+  <div class="page-banner"><div class="breadcrumb"><a href="inspections.html">Inspections</a> › <span id="crumb"></span></div><h1 id="pageTitle">Inspection</h1>
+    <div class="actions" id="bannerActions"></div></div>
+  <div class="page-content" id="content"></div>
+</main>
+<script src="data/seed.js"></script>
+<script src="js/store.js"></script>
+<script src="js/rules.js"></script>
+<script src="js/workflow.js"></script>
+<script src="js/app.js"></script>
+<script>
+(function () {
+  var S = VCS.store, R = VCS.rules, A = VCS.app, W = VCS.workflow;
+  var HABITATS = ['Flower pot plate', 'Pail / bucket', 'Domestic container', 'Roof gutter', 'Discarded receptacle', 'Gully trap', 'Scupper drain', 'Ground puddle', 'Water tank', 'Ornamental container', 'Concrete hollow', 'Tarpaulin / plastic sheet', 'Other'];
+
+  A.init({ page: 'inspection', render: function () {
+    var ins = S.get('inspections', A.qs('id'));
+    var content = document.getElementById('content');
+    if (!ins) { content.innerHTML = '<div class="empty-state"><h2>Inspection not found</h2><p><a href="inspections.html">Back to inspections</a></p></div>'; return; }
+    var u = S.currentUser(), p = S.get('premises', ins.premisesId), o = S.get('ownerOccupiers', p.ownerOccupierId);
+    if (u.role === 'FIELD_OFFICER' && ins.assignedTo !== u.id) { // BR-025
+      content.innerHTML = '<div class="empty-state"><div class="empty-icon" aria-hidden="true">🔒</div><h2>Not assigned to you</h2><p>Field Officers can only open inspections assigned to them (BR-025).</p><p><a class="btn btn-primary" href="my-work.html">Go to My work</a></p></div>';
+      document.getElementById('crumb').textContent = ins.id; return;
+    }
+    var kind = ins.isReinspection ? 'Re-inspection' + (ins.isRevisit ? ' (re-visit)' : '') : ins.isRevisit ? 'Re-visit' : 'Inspection';
+    document.title = kind + ' ' + ins.id + ' · VCS3 prototype';
+    document.getElementById('pageTitle').textContent = kind + ' ' + ins.id;
+    document.getElementById('crumb').textContent = ins.id;
+    var risk = R.BR016_riskReasons(p);
+    var samples = S.list('larvalSamples', function (s) { return s.inspectionId === ins.id; });
+    var ec = S.list('enforcementCases', function (c) { return c.inspectionId === ins.id; })[0];
+    var canRecord = ins.status === 'Assigned' && W.canTransition(u, 'Inspection', ins, 'completeNoBreeding').ok;
+
+    var html = '<div class="grid-2"><div>';
+    // summary
+    html += '<div class="card"><div class="card-head"><h2>' + A.badge(ins.status) + (R.isInspectionOverdue(ins) ? A.overdue('Past due') : '') + '</h2></div><dl class="dl-grid">' +
+      '<div><dt>Premises</dt><dd>' + A.premisesLink(p.id) + (risk.length ? A.highRisk() : '') + '</dd></div>' +
+      '<div><dt>Type</dt><dd>' + A.esc(p.premisesType) + '</dd></div>' +
+      '<div><dt>Owner / Occupier</dt><dd>' + A.esc(o.name) + '<br><span class="muted">' + A.esc(o.contactNumber) + '</span></dd></div>' +
+      '<div><dt>Assigned to</dt><dd>' + A.esc(A.userName(ins.assignedTo)) + '</dd></div>' +
+      '<div><dt>Due</dt><dd>' + A.fmtDate(ins.dueDate, true) + '</dd></div>' +
+      (ins.visitedAt ? '<div><dt>Visited</dt><dd>' + A.fmtDateTime(ins.visitedAt) + '</dd></div>' : '') +
+      (ins.enforcementCaseId ? '<div><dt>Following up</dt><dd>' + A.link('EnforcementCase', ins.enforcementCaseId) + '</dd></div>' : '') +
+      (ins.previousInspectionId ? '<div><dt>Re-visit of</dt><dd>' + A.link('Inspection', ins.previousInspectionId) + ' (no access)</dd></div>' : '') +
+      (ec ? '<div><dt>Enforcement case</dt><dd>' + A.link('EnforcementCase', ec.id) + ' ' + A.badge(ec.status) + '</dd></div>' : '') +
+      '</dl>' + (ins.remarks ? '<p style="margin-top:12px"><strong>Remarks:</strong> ' + A.esc(ins.remarks) + '</p>' : '') +
+      (ins.cancelReason ? '<div class="banner banner-warning" style="margin-top:12px"><div><strong>Cancelled</strong>' + A.esc(ins.cancelReason) + '</div></div>' : '') +
+      (risk.length ? '<p style="margin-top:12px">' + risk.map(function (r) { return '<span class="chip">' + A.esc(r.text) + '</span>'; }).join('') + '</p>' : '') + '</div>';
+
+    // visit form
+    if (canRecord) {
+      var nowLocal = R.today() + 'T' + S.now().slice(11, 16);
+      html += '<div class="card"><div class="card-head"><h2>Record visit</h2></div><form id="visitForm" novalidate>' +
+        '<div class="error-summary" role="alert" hidden></div>' +
+        '<div class="field" data-field="outcome"><fieldset style="border:0;padding:0;margin:0"><legend>Outcome <span class="req" aria-hidden="true">*</span></legend><div class="choice-group">' +
+        '<label class="choice"><input type="radio" name="outcome" value="completeNoBreeding"> No breeding</label>' +
+        '<label class="choice"><input type="radio" name="outcome" value="completeBreeding"> Breeding found</label>' +
+        '<label class="choice"><input type="radio" name="outcome" value="noAccess"> No access</label></div></fieldset>' +
+        '<span class="field-error" id="outcome-err" hidden></span></div>' +
+        A.field('visitedAt', 'Visit date and time', '<input class="input" type="datetime-local" id="visitedAt" value="' + nowLocal + '" max="' + R.today() + 'T23:59" required>', true) +
+        '<div id="habitatSection" hidden><h3>Breeding habitats</h3><p class="muted">Every habitat must be removed on the spot (BR-001) and needs a larval sample ID (BR-008).</p>' +
+        '<div class="field" data-field="habitats"><span class="field-error" id="habitats-err" hidden></span></div><div id="habitatRows"></div>' +
+        '<button type="button" class="btn btn-secondary" id="addHabitat">+ Add habitat</button></div>' +
+        A.field('remarks', 'Remarks', '<textarea class="textarea" id="remarks" maxlength="500"></textarea>', false, 'Optional. For No access, note what you tried (e.g. calling card left).') +
+        '<div class="btn-group"><button type="submit" class="btn btn-primary">Save visit</button></div>' +
+        '<p class="action-hint" id="outcomeHint" aria-live="polite"></p></form></div>';
+    }
+
+    // samples / lab results
+    if (samples.length) {
+      html += '<div class="card"><div class="card-head"><h2>Breeding habitats and larval samples</h2></div>' + A.table([
+        { label: 'Sample', html: function (s) { return '<span class="mono">' + A.esc(s.sampleNo) + '</span>'; } },
+        { label: 'Habitat', html: function (s) { return A.esc(s.habitatType) + '<br><span class="muted">' + A.esc(s.habitatLocation) + '</span>'; } },
+        { label: 'Removed', html: function () { return '✓ Yes'; } },
+        { label: 'Lab result', html: function (s) { return A.badge(s.status) + (s.species ? '<br><span class="muted"><em>' + A.esc(s.species) + '</em></span>' : '') + (s.labResultAt ? '<br><span class="muted">' + A.fmtDate(s.labResultAt) + '</span>' : ''); } },
+        { label: 'Action', html: function (s) { var c = W.canTransition(u, 'LarvalSample', s, 'recordLabResult'); return c.ok ? '<button type="button" class="btn btn-primary" data-lab="' + s.id + '">Record lab result</button>' : '—'; } }
+      ], samples) + '</div>';
+    }
+    html += '</div><aside><div class="card"><div class="card-head"><h2>History</h2></div>' +
+      A.timeline([['Inspection', ins.id]].concat(samples.map(function (s) { return ['LarvalSample', s.id]; }))) + '</div></aside></div>';
+    content.innerHTML = html;
+
+    A.renderActions(document.getElementById('bannerActions'), 'Inspection', ins);
+    content.querySelectorAll('[data-lab]').forEach(function (b) { b.addEventListener('click', function () { A.labModal(S.get('larvalSamples', b.getAttribute('data-lab'))); }); });
+    if (canRecord) bindVisitForm(ins);
+  } });
+
+  function bindVisitForm(ins) {
+    var form = document.getElementById('visitForm'), rows = document.getElementById('habitatRows'), section = document.getElementById('habitatSection');
+    var hints = {
+      completeNoBreeding: 'Saves the visit as Completed – No Breeding.' + (ins.isReinspection ? ' As a re-inspection this completes the follow-up (BR-023).' : ''),
+      completeBreeding: 'Creates one larval sample per habitat, sent to the lab (BR-008). Enforcement starts only when a lab result is positive (BR-009).',
+      noAccess: 'Schedules a re-visit in ' + S.config().revisitDays + ' days (BR-026).'
+    };
+    var n = 0;
+    function nextSampleNo() {
+      var yy = R.today().slice(2, 4), max = 0;
+      S.list('larvalSamples').forEach(function (s) { var m = /^EH(\d{2})-(\d{5})$/.exec(s.sampleNo); if (m && m[1] === yy) max = Math.max(max, +m[2]); });
+      rows.querySelectorAll('[name=sampleNo]').forEach(function (i) { var m = /^EH\d{2}-(\d{5})$/.exec(i.value); if (m) max = Math.max(max, +m[1]); });
+      return 'EH' + yy + '-' + String(max + 1).padStart(5, '0');
+    }
+    function addRow() {
+      var i = n++;
+      var div = document.createElement('div');
+      div.className = 'repeat-row'; div.setAttribute('data-row', i);
+      div.innerHTML = '<div class="repeat-row-head"><span>Habitat</span><button type="button" class="btn-link" data-remove>Remove</button></div><div class="form-grid">' +
+        A.field('h' + i + '-type', 'Habitat type', '<select class="select" id="h' + i + '-type" name="habitatType" required><option value="">Choose…</option>' + HABITATS.map(function (h) { return '<option>' + h + '</option>'; }).join('') + '</select>', true) +
+        A.field('h' + i + '-loc', 'Location in premises', '<input class="input" id="h' + i + '-loc" name="habitatLocation" maxlength="120" placeholder="e.g. Kitchen, under sink" required>', true) +
+        A.field('h' + i + '-sample', 'Larval sample ID', '<input class="input mono" id="h' + i + '-sample" name="sampleNo" value="' + nextSampleNo() + '" required>', true, 'Format EH26-00123') +
+        '</div>' + '<div class="field" data-field="h' + i + '-removed"><label class="choice"><input type="checkbox" name="isRemoved" id="h' + i + '-removed"> Habitat removed on the spot (BR-001)</label><span class="field-error" id="h' + i + '-removed-err" hidden></span></div>';
+      rows.appendChild(div);
+      div.querySelector('[data-remove]').addEventListener('click', function () { div.remove(); renumber(); });
+      renumber();
+      div.querySelector('select').focus();
+    }
+    function renumber() { rows.querySelectorAll('.repeat-row').forEach(function (r, k) { r.querySelector('.repeat-row-head span').textContent = 'Habitat ' + (k + 1); }); }
+    function collect() {
+      var outcome = (form.querySelector('[name=outcome]:checked') || {}).value;
+      var habitats = [];
+      rows.querySelectorAll('.repeat-row').forEach(function (r) {
+        habitats.push({ row: r.getAttribute('data-row'), habitatType: r.querySelector('[name=habitatType]').value, habitatLocation: r.querySelector('[name=habitatLocation]').value, sampleNo: r.querySelector('[name=sampleNo]').value.trim(), isRemoved: r.querySelector('[name=isRemoved]').checked });
+      });
+      var v = form.querySelector('#visitedAt').value;
+      return { outcome: outcome, visitedAt: v ? v.slice(0, 16) + ':00+08:00' : '', remarks: form.querySelector('#remarks').value, habitats: habitats };
+    }
+    // map validation field ids (h<index>) to the row ids actually rendered
+    function mapErrors(errs, habitats) {
+      return errs.map(function (e) {
+        var m = e.field && /^h(\d+)-(.*)$/.exec(e.field);
+        if (m && habitats[+m[1]]) e.field = 'h' + habitats[+m[1]].row + '-' + m[2];
+        return e;
+      });
+    }
+    form.addEventListener('change', function (e) {
+      if (e.target.name === 'outcome') {
+        section.hidden = e.target.value !== 'completeBreeding';
+        if (!section.hidden && !rows.children.length) addRow();
+        document.getElementById('outcomeHint').textContent = hints[e.target.value] || '';
+      }
+    });
+    // validate on blur (BR-008 per field)
+    form.addEventListener('focusout', function (e) {
+      if (!e.target.closest('.repeat-row')) return;
+      var v = collect();
+      var errs = mapErrors(R.BR008_validateHabitats(v.habitats), v.habitats).filter(function (x) { return x.field === e.target.id; });
+      var f = form.querySelector('[data-field="' + e.target.id + '"]');
+      if (!f) return;
+      var span = f.querySelector('.field-error');
+      f.classList.toggle('has-error', !!errs.length);
+      span.hidden = !errs.length; span.textContent = errs.length ? errs[0].message : '';
+    });
+    document.getElementById('addHabitat').addEventListener('click', addRow);
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var v = collect();
+      if (!v.outcome) { A.showErrors(form, [{ field: 'outcome', message: 'Choose the visit outcome (BR-007).' }]); return; }
+      var res = S.transition('Inspection', ins.id, v.outcome, { visitedAt: v.visitedAt, remarks: v.remarks, habitats: v.outcome === 'completeBreeding' ? v.habitats : [] });
+      if (!res.ok) { A.showErrors(form, mapErrors(res.errors, v.habitats)); return; }
+      sessionStorage.setItem('vcs3.toast', res.message);
+      location.reload();
+    });
+  }
+})();
+</script>
+</body>
+</html>

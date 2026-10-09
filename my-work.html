@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My work · VCS3 prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<!-- SCR-02 My work (US-004, US-026) -->
+<main id="main" class="app-main" tabindex="-1">
+  <div class="page-banner"><div class="breadcrumb" id="crumb">My work</div><h1 id="pageTitle">My work</h1></div>
+  <div class="page-content" id="content"></div>
+</main>
+<script src="data/seed.js"></script>
+<script src="js/store.js"></script>
+<script src="js/rules.js"></script>
+<script src="js/workflow.js"></script>
+<script src="js/app.js"></script>
+<script>
+(function () {
+  var S = VCS.store, R = VCS.rules, A = VCS.app;
+  A.init({ page: 'my-work', render: function () {
+    var u = S.currentUser(), t = R.today();
+    document.getElementById('crumb').textContent = A.ROLE_LABEL[u.role] + ' · ' + u.name;
+    var tabs = [];
+    var premCol = { label: 'Premises', html: function (r) { return A.premisesLink(r.premisesId || S.get('enforcementCases', r.enforcementCaseId).premisesId); } };
+    var noticeCols = [
+      { label: 'Notice no.', html: function (n) { return A.link('Notice', n.id, n.noticeNo); } },
+      premCol,
+      { label: 'Type', html: function (n) { return A.esc(n.noticeType); } },
+      { label: 'Charges', num: true, html: function (n) { return n.charges.length; } },
+      { label: 'Total fine', num: true, html: function (n) { return A.money(n.totalFine); } },
+      { label: 'Status', html: function (n) { return A.badge(n.status) + (R.BR020_isApprovalOverdue(n) ? A.overdue() : ''); } }
+    ];
+
+    if (u.role === 'FIELD_OFFICER' || S.list('inspections', function (i) { return i.assignedTo === u.id && i.status === 'Assigned'; }).length) {
+      document.getElementById('pageTitle').textContent = u.role === 'FIELD_OFFICER' ? 'My inspections and notices' : 'My work';
+      var mine = S.list('inspections', function (i) { return i.assignedTo === u.id && i.status === 'Assigned'; }).sort(function (a, b) { return a.dueDate < b.dueDate ? -1 : 1; });
+      tabs.push({ id: 'ins', label: 'Inspections to visit', rows: mine, html: A.table([
+        { label: 'Inspection', html: function (i) { return A.link('Inspection', i.id); } },
+        premCol,
+        { label: 'Kind', html: function (i) { return i.isReinspection ? 'Re-inspection' + (i.isRevisit ? ' (re-visit)' : '') : i.isRevisit ? 'Re-visit after no access' : 'Inspection'; } },
+        { label: 'Due', html: function (i) { return A.fmtDate(i.dueDate, true) + (R.isInspectionOverdue(i) ? A.overdue() : i.dueDate === t ? ' <span class="badge badge-warning">Due today</span>' : ''); } },
+        { label: 'High-risk', html: function (i) { var r = R.BR016_riskReasons(S.get('premises', i.premisesId)); return r.length ? A.highRisk() : '—'; } }
+      ], mine, 'No inspections assigned to you') });
+      var labs = S.list('larvalSamples', function (s) { return s.status === 'Pending Lab' && S.get('inspections', s.inspectionId).assignedTo === u.id; });
+      tabs.push({ id: 'lab', label: 'Lab results pending', rows: labs, html: A.table([
+        { label: 'Sample', html: function (s) { return A.link('LarvalSample', s.id, s.sampleNo); } },
+        { label: 'Premises', html: function (s) { return A.premisesLink(S.get('inspections', s.inspectionId).premisesId); } },
+        { label: 'Habitat', html: function (s) { return A.esc(s.habitatType) + '<br><span class="muted">' + A.esc(s.habitatLocation) + '</span>'; } },
+        { label: 'Collected', html: function (s) { return A.fmtDate(S.get('inspections', s.inspectionId).visitedAt); } },
+        { label: 'Action', html: function (s) { return '<button type="button" class="btn btn-primary" data-lab="' + s.id + '">Record lab result</button>'; } }
+      ], labs, 'No samples waiting for lab results') });
+      var todo = S.list('notices', function (n) { return n.draftedBy === u.id && ['Draft', 'Returned', 'Approved'].indexOf(n.status) >= 0; })
+        .sort(function (a, b) { var o = { Returned: 0, Draft: 1, Approved: 2 }; return o[a.status] - o[b.status]; });
+      tabs.push({ id: 'ntc', label: 'Notices to action', rows: todo, html: '<p class="muted">Draft and Returned notices need submitting; Approved notices need serving.</p>' + A.table(noticeCols, todo, 'No notices need your action') });
+    }
+
+    if (u.role === 'APPROVING_OFFICER') {
+      document.getElementById('pageTitle').textContent = 'Approval queue';
+      var pa = S.list('notices', function (n) { return n.status === 'Pending Approval'; }).sort(function (a, b) { return a.submittedAt < b.submittedAt ? -1 : 1; });
+      tabs.unshift({ id: 'pa', label: 'Pending approval', rows: pa, html: '<p class="muted">Oldest first. Approval is due within ' + S.config().approvalSlaWorkingDays + ' working days of submission (BR-020).</p>' + A.table([
+        noticeCols[0], premCol, noticeCols[2], noticeCols[3], noticeCols[4],
+        { label: 'Drafted by', html: function (n) { return A.esc(A.userName(n.draftedBy)) + (n.draftedBy === u.id ? ' <span class="badge badge-neutral">You: BR-010</span>' : ''); } },
+        { label: 'Approval due', html: function (n) { return A.fmtDate(n.approvalDueAt) + (R.BR020_isApprovalOverdue(n) ? A.overdue() : n.approvalDueAt === t ? ' <span class="badge badge-warning">Due today</span>' : ''); } }
+      ], pa, 'Nothing waiting for approval') });
+      var withdrawn = S.list('enforcementCases', R.BR027_canCancelCase);
+      tabs.push({ id: 'wd', label: 'Withdrawn, not reissued', rows: withdrawn, html: '<p class="muted">Cases whose latest notice was withdrawn. Wait for a reissue, or cancel the case (BR-027).</p>' + A.table([
+        { label: 'Case', html: function (c) { return A.link('EnforcementCase', c.id); } }, premCol,
+        { label: 'Withdrawn notice', html: function (c) { var n = R.latestNotice(c.id); return A.link('Notice', n.id, n.noticeNo) + '<br><span class="muted">' + A.esc(n.withdrawReason) + '</span>'; } }
+      ], withdrawn, 'None') });
+    }
+
+    if (u.role === 'OPS_MANAGER') {
+      document.getElementById('pageTitle').textContent = 'Overdue and due work';
+      var oa = S.list('notices', R.BR020_isApprovalOverdue);
+      tabs.push({ id: 'oa', label: 'Overdue approvals', rows: oa, html: A.table(noticeCols.concat([{ label: 'Was due', html: function (n) { return A.fmtDate(n.approvalDueAt); } }]), oa, 'No overdue approvals') });
+      var pay = S.list('enforcementCases', function (c) { return c.status === 'Awaiting Payment'; }).sort(function (a, b) { return a.paymentDueAt < b.paymentDueAt ? -1 : 1; });
+      tabs.push({ id: 'pay', label: 'Payments due', rows: pay, html: A.table([
+        { label: 'Case', html: function (c) { return A.link('EnforcementCase', c.id); } }, premCol,
+        { label: 'Payment due', html: function (c) { var d = R.daysBetween(t, c.paymentDueAt); return A.fmtDate(c.paymentDueAt) + ' <span class="muted">(' + (d === 0 ? 'today' : d + ' days') + ')</span>'; } },
+        { label: 'Re-inspection', html: function (c) { return R.BR023_reinspectionDone(c) ? '<span class="badge badge-success">Done</span>' : '<span class="badge badge-info">Pending</span>'; } }
+      ], pay, 'No fines awaiting payment') });
+      var pd = S.list('inspections', R.isInspectionOverdue);
+      tabs.push({ id: 'pd', label: 'Inspections past due', rows: pd, html: A.table([
+        { label: 'Inspection', html: function (i) { return A.link('Inspection', i.id); } }, premCol,
+        { label: 'Officer', html: function (i) { return A.esc(A.userName(i.assignedTo)); } },
+        { label: 'Due', html: function (i) { return A.fmtDate(i.dueDate) + A.overdue(); } }
+      ], pd, 'No inspections past due') });
+    }
+
+    var sel = location.hash.slice(1) || tabs[0].id;
+    if (!tabs.some(function (x) { return x.id === sel; })) sel = tabs[0].id;
+    var html = '<div class="tabs" role="tablist">' + tabs.map(function (x) {
+      return '<button type="button" class="tab" role="tab" id="tab-' + x.id + '" aria-controls="panel-' + x.id + '" aria-selected="' + (x.id === sel) + '" tabindex="' + (x.id === sel ? 0 : -1) + '">' + A.esc(x.label) + ' (' + x.rows.length + ')</button>';
+    }).join('') + '</div>' + tabs.map(function (x) {
+      return '<div role="tabpanel" id="panel-' + x.id + '" aria-labelledby="tab-' + x.id + '"' + (x.id === sel ? '' : ' hidden') + '>' + x.html + '</div>';
+    }).join('');
+    var c = document.getElementById('content');
+    c.innerHTML = html;
+    var tabEls = c.querySelectorAll('[role=tab]');
+    function select(btn) {
+      tabEls.forEach(function (b) { var on = b === btn; b.setAttribute('aria-selected', on); b.tabIndex = on ? 0 : -1; document.getElementById(b.getAttribute('aria-controls')).hidden = !on; });
+      history.replaceState(null, '', '#' + btn.id.slice(4));
+    }
+    tabEls.forEach(function (b, i) {
+      b.addEventListener('click', function () { select(b); });
+      b.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { var n = tabEls[(i + (e.key === 'ArrowRight' ? 1 : tabEls.length - 1)) % tabEls.length]; n.focus(); select(n); }
+      });
+    });
+    c.querySelectorAll('[data-lab]').forEach(function (b) { b.addEventListener('click', function () { A.labModal(S.get('larvalSamples', b.getAttribute('data-lab'))); }); });
+  } });
+})();
+</script>
+</body>
+</html>
